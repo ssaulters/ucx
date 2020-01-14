@@ -4,6 +4,7 @@
  * See file LICENSE for terms.
  */
 
+#include "ucs/sys/compiler_def.h"
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
@@ -18,6 +19,7 @@
 #include <netinet/tcp.h>
 #include <dirent.h>
 
+int is_server = 0;
 
 static ucs_config_field_t uct_tcp_iface_config_table[] = {
   {"", "", NULL,
@@ -27,7 +29,7 @@ static ucs_config_field_t uct_tcp_iface_config_table[] = {
   {"TX_SEG_SIZE", "8kb",
    "Size of send copy-out buffer",
    ucs_offsetof(uct_tcp_iface_config_t, tx_seg_size), UCS_CONFIG_TYPE_MEMUNITS},
-  
+
   {"RX_SEG_SIZE", "64kb",
    "Size of receive copy-out buffer",
    ucs_offsetof(uct_tcp_iface_config_t, rx_seg_size), UCS_CONFIG_TYPE_MEMUNITS},
@@ -77,6 +79,9 @@ static ucs_config_field_t uct_tcp_iface_config_table[] = {
 
   UCT_IFACE_MPOOL_CONFIG_FIELDS("RX_", -1, 8, "receive",
                                 ucs_offsetof(uct_tcp_iface_config_t, rx_mpool), ""),
+  {"NUM_SOCKETS", "1",
+   "Number of TCP sockets to use in parallel for each endpoint",
+   ucs_offsetof(uct_tcp_iface_config_t, num_sockets), UCS_CONFIG_TYPE_UINT},
 
   {NULL}
 };
@@ -188,13 +193,15 @@ static void uct_tcp_iface_handle_events(void *callback_data,
     unsigned *count  = (unsigned*)arg;
     uct_tcp_ep_t *ep = (uct_tcp_ep_t*)callback_data;
 
-    ucs_assertv(ep->conn_state != UCT_TCP_EP_CONN_STATE_CLOSED, "ep=%p", ep);
+    //ucs_assertv(ep->conn_state != UCT_TCP_EP_CONN_STATE_CLOSED, "ep=%p", ep);
+    if (ep->conn_state != UCT_TCP_EP_CONN_STATE_CLOSED) {
 
     if (events & UCS_EVENT_SET_EVREAD) {
         *count += uct_tcp_ep_cm_state[ep->conn_state].rx_progress(ep);
     }
     if (events & UCS_EVENT_SET_EVWRITE) {
         *count += uct_tcp_ep_cm_state[ep->conn_state].tx_progress(ep);
+    }
     }
 }
 
@@ -251,28 +258,38 @@ static void uct_tcp_iface_listen_close(uct_tcp_iface_t *iface)
 static void uct_tcp_iface_connect_handler(int listen_fd, void *arg)
 {
     uct_tcp_iface_t *iface = arg;
-    struct sockaddr_in peer_addr;
+    struct sockaddr_in peer_addr[UCT_TCP_MAX_SOCKETS];
     socklen_t addrlen;
     ucs_status_t status;
-    int fd;
-
+    int fds[UCT_TCP_MAX_SOCKETS];
     ucs_assert(listen_fd == iface->listen_fd);
 
     for (;;) {
-        addrlen = sizeof(peer_addr);
-        status  = ucs_socket_accept(iface->listen_fd, (struct sockaddr*)&peer_addr,
-                                    &addrlen, &fd);
+        addrlen = sizeof(peer_addr[0]);
+
+        status = ucs_socket_accept(iface->listen_fd, (struct sockaddr*)&peer_addr[0],
+                                   &addrlen, &fds[0]);
         if (status != UCS_OK) {
             if (status != UCS_ERR_NO_PROGRESS) {
+                ucs_error("accept() failed: %m");
                 uct_tcp_iface_listen_close(iface);
             }
             return;
         }
-        ucs_assert(fd != -1);
+        ucs_assert(fds[0] != -1);
+        for (int i = 1; i < iface->config.num_sockets; i++) {
+            // TODO: non-blocking
+            do {
+                fds[i] = accept(iface->listen_fd, (struct sockaddr*)&peer_addr[i], &addrlen);
+            } while (fds[i] == -1);
+        }
+        pprintf("Accepted %d sockets\n", iface->config.num_sockets);
 
-        status = uct_tcp_cm_handle_incoming_conn(iface, &peer_addr, fd);
+        status = uct_tcp_cm_handle_incoming_conn(iface, peer_addr, fds);
         if (status != UCS_OK) {
-            close(fd);
+            for (int i = 0; i < iface->config.num_sockets; i++) {
+                close(fds[i]);
+            }
             return;
         }
     }
@@ -398,6 +415,13 @@ static UCS_CLASS_INIT_FUNC(uct_tcp_iface_t, uct_md_h md, uct_worker_h worker,
                                                     uct_tcp_iface_config_t);
     ucs_status_t status;
 
+    // TODO:
+    char* ns = getenv("IS_SERVER");
+    if (ns && atoi(ns) == 1) {
+        is_server = 1;
+    }
+    printf("NUM_SOCKETS = %u", config->num_sockets);
+
     UCT_CHECK_PARAM(params->field_mask & UCT_IFACE_PARAM_FIELD_OPEN_MODE,
                     "UCT_IFACE_PARAM_FIELD_OPEN_MODE is not defined");
     if (!(params->open_mode & UCT_IFACE_OPEN_MODE_DEVICE)) {
@@ -449,6 +473,12 @@ static UCS_CLASS_INIT_FUNC(uct_tcp_iface_t, uct_md_h md, uct_worker_h worker,
                   self->config.zcopy.hdr_offset, self->config.tx_seg_size,
                   self->config.zcopy.max_iov);
         return UCS_ERR_INVALID_PARAM;
+    }
+
+    self->config.num_sockets = config->num_sockets;
+    if (self->config.num_sockets > UCT_TCP_MAX_SOCKETS) {
+        self->config.num_sockets = UCT_TCP_MAX_SOCKETS;
+        ucs_warn("UCX_TCP_NUM_SOCKETS truncated to %d", UCT_TCP_MAX_SOCKETS);
     }
 
     self->config.zcopy.max_hdr     = self->config.tx_seg_size -

@@ -47,8 +47,24 @@
 #define UCT_TCP_EP_PUT_SERVICE_LENGTH        (sizeof(uct_tcp_am_hdr_t) + \
                                               sizeof(uct_tcp_ep_put_req_hdr_t))
 
+/* Maximum number of sockets per endpoint */
+#define UCT_TCP_MAX_SOCKETS 32
+
 #define UCT_TCP_CONFIG_MAX_CONN_RETRIES      "MAX_CONN_RETRIES"
 
+extern int is_server;
+
+#define pprint(str)                                                                      \
+    if (1) {                                                                             \
+        printf("%s: " str, (is_server ? "SERVER" : "CLIENT"));                           \
+        fflush(stdin);                                                                   \
+    }
+
+#define pprintf(fmt, ...)                                                                \
+    if (1) {                                                                             \
+        printf("%s: " fmt, (is_server ? "SERVER" : "CLIENT"), __VA_ARGS__);              \
+        fflush(stdin);                                                                   \
+    }
 
 /**
  * TCP context type
@@ -256,9 +272,8 @@ typedef struct uct_tcp_ep_ctx {
     uint32_t                      put_sn;         /* Sequence number of last sent
                                                    * or received PUT operation */
     void                          *buf;           /* Partial send/recv data */
-    size_t                        length;         /* How much data in the buffer */
-    size_t                        offset;         /* How much data was sent (TX) or was
-                                                   * handled after receiving (RX) */
+    size_t                        lengths[UCT_TCP_MAX_SOCKETS]; /* How much data in the buffer */
+    size_t                        offsets[UCT_TCP_MAX_SOCKETS]; /* Next offset to send/recv */
 } uct_tcp_ep_ctx_t;
 
 
@@ -281,13 +296,13 @@ typedef struct uct_tcp_ep_zcopy_tx {
 struct uct_tcp_ep {
     uct_base_ep_t                 super;
     uint8_t                       ctx_caps;         /* Which contexts are supported */
-    int                           fd;               /* Socket file descriptor */
+    int                           fds[UCT_TCP_MAX_SOCKETS]; /* Socket file descriptors */
     uct_tcp_ep_conn_state_t       conn_state;       /* State of connection with peer */
     unsigned                      conn_retries;     /* Number of connection attempts done */
     int                           events;           /* Current notifications */
     uct_tcp_ep_ctx_t              tx;               /* TX resources */
     uct_tcp_ep_ctx_t              rx;               /* RX resources */
-    struct sockaddr_in            peer_addr;        /* Remote iface addr */
+    struct sockaddr_in            peer_addrs[UCT_TCP_MAX_SOCKETS]; /* Remote iface addrs */
     ucs_queue_head_t              pending_q;        /* Pending operations */
     ucs_queue_head_t              put_comp_q;       /* Flush completions waiting for
                                                      * outstanding PUTs acknowledgment */
@@ -335,6 +350,7 @@ typedef struct uct_tcp_iface {
         unsigned                  max_conn_retries;  /* How many connection establishment attmepts
                                                       * should be done if dropped connection was
                                                       * detected due to lack of system resources */
+        unsigned                  num_sockets;       /* Num of sockets per endpoint */
     } config;
 
     struct {
@@ -363,6 +379,7 @@ typedef struct uct_tcp_iface_config {
     size_t                        sockopt_rcvbuf;
     uct_iface_mpool_config_t      tx_mpool;
     uct_iface_mpool_config_t      rx_mpool;
+    unsigned                      num_sockets;
 } uct_tcp_iface_config_t;
 
 
@@ -394,7 +411,7 @@ void uct_tcp_iface_remove_ep(uct_tcp_ep_t *ep);
 
 ucs_status_t uct_tcp_ep_handle_dropped_connect(uct_tcp_ep_t *ep, int io_errno);
 
-ucs_status_t uct_tcp_ep_init(uct_tcp_iface_t *iface, int fd,
+ucs_status_t uct_tcp_ep_init(uct_tcp_iface_t *iface, int *fds,
                              const struct sockaddr_in *dest_addr,
                              uct_tcp_ep_t **ep_p);
 
@@ -480,7 +497,7 @@ void uct_tcp_cm_purge_ep(uct_tcp_ep_t *ep);
 
 ucs_status_t uct_tcp_cm_handle_incoming_conn(uct_tcp_iface_t *iface,
                                              const struct sockaddr_in *peer_addr,
-                                             int fd);
+                                             int *fds);
 
 ucs_status_t uct_tcp_cm_conn_start(uct_tcp_ep_t *ep);
 

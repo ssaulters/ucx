@@ -80,7 +80,7 @@ void uct_tcp_cm_change_conn_state(uct_tcp_ep_t *ep,
                   uct_tcp_ep_cm_state[ep->conn_state].name,
                   ucs_sockaddr_str((const struct sockaddr*)&iface->config.ifaddr,
                                    str_local_addr, UCS_SOCKADDR_STRING_LEN),
-                  ucs_sockaddr_str((const struct sockaddr*)&ep->peer_addr,
+                  ucs_sockaddr_str((const struct sockaddr*)&ep->peer_addrs[0],
                                    str_remote_addr, UCS_SOCKADDR_STRING_LEN),
                   uct_tcp_ep_ctx_caps_str(ep->ctx_caps, str_ctx_caps));
     } else {
@@ -137,7 +137,7 @@ static void uct_tcp_cm_trace_conn_pkt(const uct_tcp_ep_t *ep,
     ucs_snprintf_zero(msg, sizeof(msg), fmt_str, event_str);
 
     ucs_log(log_level, "tcp_ep %p: %s %s", ep, msg,
-            ucs_sockaddr_str((const struct sockaddr*)&ep->peer_addr,
+            ucs_sockaddr_str((const struct sockaddr*)&ep->peer_addrs[0],
                              str_addr, UCS_SOCKADDR_STRING_LEN));
 }
 
@@ -193,7 +193,7 @@ ucs_status_t uct_tcp_cm_send_event(uct_tcp_ep_t *ep, uct_tcp_cm_conn_event_t eve
         *pkt_event           = event;
     }
 
-    status = ucs_socket_send(ep->fd, pkt_buf, pkt_length,
+    status = ucs_socket_send(ep->fds[0], pkt_buf, pkt_length,
                              uct_tcp_cm_io_err_handler_cb, ep);
     if (status != UCS_OK) {
         uct_tcp_cm_trace_conn_pkt(ep, UCS_LOG_LEVEL_ERROR,
@@ -211,7 +211,7 @@ ucs_status_t uct_tcp_cm_add_ep(uct_tcp_iface_t *iface, uct_tcp_ep_t *ep)
     khiter_t iter;
     int ret;
 
-    iter = kh_get(uct_tcp_cm_eps, &iface->ep_cm_map, ep->peer_addr);
+    iter = kh_get(uct_tcp_cm_eps, &iface->ep_cm_map, ep->peer_addrs[0]);
     if (iter == kh_end(&iface->ep_cm_map)) {
         ep_list = ucs_malloc(sizeof(*ep_list), "tcp_ep_cm_map_entry");
         if (ep_list == NULL) {
@@ -219,7 +219,7 @@ ucs_status_t uct_tcp_cm_add_ep(uct_tcp_iface_t *iface, uct_tcp_ep_t *ep)
         }
 
         ucs_list_head_init(ep_list);
-        iter = kh_put(uct_tcp_cm_eps, &iface->ep_cm_map, ep->peer_addr, &ret);
+        iter = kh_put(uct_tcp_cm_eps, &iface->ep_cm_map, ep->peer_addrs[0], &ret);
         kh_value(&iface->ep_cm_map, iter) = ep_list;
 
         ucs_debug("tcp_iface %p: %p list added to map", iface, ep_list);
@@ -242,7 +242,7 @@ void uct_tcp_cm_remove_ep(uct_tcp_iface_t *iface, uct_tcp_ep_t *ep)
     ucs_list_link_t *ep_list;
     khiter_t iter;
 
-    iter = kh_get(uct_tcp_cm_eps, &iface->ep_cm_map, ep->peer_addr);
+    iter = kh_get(uct_tcp_cm_eps, &iface->ep_cm_map, ep->peer_addrs[0]);
     ucs_assertv(iter != kh_end(&iface->ep_cm_map), "iface=%p", iface);
 
     ep_list = kh_value(&iface->ep_cm_map, iter);
@@ -299,6 +299,9 @@ uct_tcp_cm_simult_conn_accept_remote_conn(uct_tcp_ep_t *accept_ep,
 {
     uct_tcp_cm_conn_event_t event;
     ucs_status_t status;
+    int i;
+    uct_tcp_iface_t *iface = ucs_derived_of(connect_ep->super.super.iface,
+                                            uct_tcp_iface_t);
 
     /* 1. Close the allocated socket `fd` to avoid reading any
      *    events for this socket and assign the socket `fd` returned
@@ -307,8 +310,10 @@ uct_tcp_cm_simult_conn_accept_remote_conn(uct_tcp_ep_t *accept_ep,
     ucs_assertv(connect_ep->events == 0,
                 "Requested epoll events must be 0-ed for ep=%p", connect_ep);
 
-    close(connect_ep->fd);
-    connect_ep->fd = accept_ep->fd;
+    for (i = 0; i < iface->config.num_sockets; i++) {
+        close(connect_ep->fds[i]);
+        connect_ep->fds[i] = accept_ep->fds[i];
+    }
 
     /* 2. Migrate RX from the EP allocated during accepting connection to
      *    the found EP */
@@ -322,7 +327,10 @@ uct_tcp_cm_simult_conn_accept_remote_conn(uct_tcp_ep_t *accept_ep,
      *    upon return from this function (set its socket `fd` to -1 prior
      *    to avoid closing this socket) */
     uct_tcp_ep_mod_events(accept_ep, 0, UCS_EVENT_SET_EVREAD);
-    accept_ep->fd = -1;
+    for (i = 0; i < iface->config.num_sockets; i++) {
+        accept_ep->fds[i] = -1;
+    }
+    // uct_tcp_ep_destroy_internal(&accept_ep->super.super);
     accept_ep = NULL;
 
     /* 4. Send ACK to the peer */
@@ -336,9 +344,11 @@ uct_tcp_cm_simult_conn_accept_remote_conn(uct_tcp_ep_t *accept_ep,
      *      will wait for REQ and after receiving the REQ, peer will
      *      be able to receive the data from us */
     if (connect_ep->conn_state == UCT_TCP_EP_CONN_STATE_CONNECTING) {
+        pprint("REQ\n");
         event |= UCT_TCP_CM_CONN_REQ;
     } else if (connect_ep->conn_state == UCT_TCP_EP_CONN_STATE_WAITING_ACK) {
         event |= UCT_TCP_CM_CONN_WAIT_REQ;
+        pprint("WREQ\n");
     }
 
     status = uct_tcp_cm_send_event(connect_ep, event);
@@ -363,7 +373,7 @@ static unsigned uct_tcp_cm_handle_simult_conn(uct_tcp_iface_t *iface,
 
     if ((connect_ep->conn_state != UCT_TCP_EP_CONN_STATE_CONNECTED) &&
         (connect_ep->conn_state != UCT_TCP_EP_CONN_STATE_WAITING_REQ)) {
-        cmp = ucs_sockaddr_cmp((const struct sockaddr*)&connect_ep->peer_addr,
+        cmp = ucs_sockaddr_cmp((const struct sockaddr*)&connect_ep->peer_addrs[0],
                                (const struct sockaddr*)&iface->config.ifaddr,
                                &status);
         if (status != UCS_OK) {
@@ -376,6 +386,7 @@ static unsigned uct_tcp_cm_handle_simult_conn(uct_tcp_iface_t *iface,
     }
 
     if (!accept_conn) {
+        pprint("simult_conn 1\n");
         /* Migrate RX from the EP allocated during accepting connection to
          * the found EP. */
         status = uct_tcp_ep_move_ctx_cap(accept_ep, connect_ep,
@@ -390,6 +401,7 @@ static unsigned uct_tcp_cm_handle_simult_conn(uct_tcp_iface_t *iface,
 
         uct_tcp_ep_mod_events(connect_ep, UCS_EVENT_SET_EVREAD, 0);
     } else /* our iface address less than remote && we are not connected */ {
+        pprint("simult_conn 2\n");
         /* Accept the remote connection and close the current one */
         ucs_assertv(cmp != 0, "peer addresses for accepted tcp_ep %p and "
                     "found tcp_ep %p mustn't be equal", accept_ep, connect_ep);
@@ -397,6 +409,7 @@ static unsigned uct_tcp_cm_handle_simult_conn(uct_tcp_iface_t *iface,
                                                                    connect_ep);
     }
 
+    pprint("CONNECTED\n");
     return progress_count;
 }
 
@@ -411,7 +424,7 @@ uct_tcp_cm_handle_conn_req(uct_tcp_ep_t **ep_p,
     ucs_status_t status;
     uct_tcp_ep_t *peer_ep;
 
-    ep->peer_addr = cm_req_pkt->iface_addr;
+    ep->peer_addrs[0] = cm_req_pkt->iface_addr;
     uct_tcp_cm_trace_conn_pkt(ep, UCS_LOG_LEVEL_TRACE,
                               "%s received from", UCT_TCP_CM_CONN_REQ);
 
@@ -428,7 +441,7 @@ uct_tcp_cm_handle_conn_req(uct_tcp_ep_t **ep_p,
                 "ep %p mustn't have TX cap", ep);
 
     if (!uct_tcp_ep_is_self(ep) &&
-        (peer_ep = uct_tcp_cm_search_ep(iface, &ep->peer_addr,
+        (peer_ep = uct_tcp_cm_search_ep(iface, &ep->peer_addrs[0],
                                         UCT_TCP_EP_CTX_TYPE_TX))) {
         progress_count = uct_tcp_cm_handle_simult_conn(iface, ep, peer_ep);
         ucs_assert(!(ep->ctx_caps & UCS_BIT(UCT_TCP_EP_CTX_TYPE_TX)));
@@ -524,7 +537,7 @@ static ucs_status_t uct_tcp_cm_conn_complete(uct_tcp_ep_t *ep,
     uct_tcp_cm_change_conn_state(ep, UCT_TCP_EP_CONN_STATE_WAITING_ACK);
     uct_tcp_ep_mod_events(ep, UCS_EVENT_SET_EVREAD, 0);
 
-    ucs_assertv((ep->tx.length == 0) && (ep->tx.offset == 0) &&
+    ucs_assertv((ep->tx.lengths[0] == 0) && (ep->tx.offsets[0] == 0) &&
                 (ep->tx.buf == NULL), "ep=%p", ep);
 out:
     if (progress_count_p != NULL) {
@@ -537,9 +550,9 @@ unsigned uct_tcp_cm_conn_progress(uct_tcp_ep_t *ep)
 {
     unsigned progress_count;
 
-    if (!ucs_socket_is_connected(ep->fd)) {
+    if (!ucs_socket_is_connected(ep->fds[0])) {
         ucs_error("tcp_ep %p: connection establishment for "
-                  "socket fd %d was unsuccessful", ep, ep->fd);
+                  "socket fd %d was unsuccessful", ep, ep->fds[0]);
         goto err;
     }
 
@@ -555,7 +568,8 @@ ucs_status_t uct_tcp_cm_conn_start(uct_tcp_ep_t *ep)
 {
     uct_tcp_iface_t *iface = ucs_derived_of(ep->super.super.iface,
                                             uct_tcp_iface_t);
-    ucs_status_t status;
+    ucs_status_t status = UCS_OK;;
+    int i;
 
     if (ep->conn_retries++ > iface->config.max_conn_retries) {
         ucs_error("tcp_ep %p: reached maximum number of connection retries "
@@ -564,8 +578,12 @@ ucs_status_t uct_tcp_cm_conn_start(uct_tcp_ep_t *ep)
     }
 
     uct_tcp_cm_change_conn_state(ep, UCT_TCP_EP_CONN_STATE_CONNECTING);
+    // TODO:
+    for (i = 0; i < iface->config.num_sockets; i++) {
+        status = ucs_socket_connect(ep->fds[i], (const struct sockaddr*)&ep->peer_addrs[i]);
+    }
+    pprintf("socket_connect %d sockets\n", iface->config.num_sockets);
 
-    status = ucs_socket_connect(ep->fd, (const struct sockaddr*)&ep->peer_addr);
     if (UCS_STATUS_IS_ERR(status)) {
         return status;
     } else if (status == UCS_INPROGRESS) {
@@ -576,9 +594,11 @@ ucs_status_t uct_tcp_cm_conn_start(uct_tcp_ep_t *ep)
     ucs_assert(status == UCS_OK);
 
     if (!iface->config.conn_nb) {
-        status = ucs_sys_fcntl_modfl(ep->fd, O_NONBLOCK, 0);
-        if (status != UCS_OK) {
-            return status;
+        for (i = 0; i < iface->config.num_sockets; i++) {
+            status = ucs_sys_fcntl_modfl(ep->fds[i], O_NONBLOCK, 0);
+            if (status != UCS_OK) {
+                return status;
+            }
         }
     }
 
@@ -588,24 +608,26 @@ ucs_status_t uct_tcp_cm_conn_start(uct_tcp_ep_t *ep)
 /* This function is called from async thread */
 ucs_status_t uct_tcp_cm_handle_incoming_conn(uct_tcp_iface_t *iface,
                                              const struct sockaddr_in *peer_addr,
-                                             int fd)
+                                             int* fds)
 {
     char str_local_addr[UCS_SOCKADDR_STRING_LEN];
     char str_remote_addr[UCS_SOCKADDR_STRING_LEN];
     ucs_status_t status;
     uct_tcp_ep_t *ep;
 
-    if (!ucs_socket_is_connected(fd)) {
-        ucs_warn("tcp_iface %p: connection establishment for socket fd %d "
-                 "from %s to %s was unsuccessful", iface, fd,
-                 ucs_sockaddr_str((const struct sockaddr*)&peer_addr,
-                                  str_remote_addr, UCS_SOCKADDR_STRING_LEN),
-                 ucs_sockaddr_str((const struct sockaddr*)&iface->config.ifaddr,
-                                  str_local_addr, UCS_SOCKADDR_STRING_LEN));
-        return UCS_ERR_UNREACHABLE;
+    for (int i = 0; i < iface->config.num_sockets; i++) {
+        if (!ucs_socket_is_connected(fds[i])) {
+            ucs_warn("tcp_iface %p: connection establishment for socket fd %d "
+                     "from %s to %s was unsuccessful\n", iface, fds[i],
+                     ucs_sockaddr_str((const struct sockaddr*)&peer_addr[i],
+                                      str_remote_addr, UCS_SOCKADDR_STRING_LEN),
+                     ucs_sockaddr_str((const struct sockaddr*)&iface->config.ifaddr,
+                                      str_local_addr, UCS_SOCKADDR_STRING_LEN));
+            return UCS_ERR_UNREACHABLE;
+        }
     }
 
-    status = uct_tcp_ep_init(iface, fd, NULL, &ep);
+    status = uct_tcp_ep_init(iface, fds, NULL, &ep);
     if (status != UCS_OK) {
         return status;
     }
@@ -613,12 +635,14 @@ ucs_status_t uct_tcp_cm_handle_incoming_conn(uct_tcp_iface_t *iface,
     uct_tcp_cm_change_conn_state(ep, UCT_TCP_EP_CONN_STATE_RECV_MAGIC_NUMBER);
     uct_tcp_ep_mod_events(ep, UCS_EVENT_SET_EVREAD, 0);
 
-    ucs_debug("tcp_iface %p: accepted connection from "
-              "%s on %s to tcp_ep %p (fd %d)", iface,
-              ucs_sockaddr_str((const struct sockaddr*)peer_addr,
-                               str_remote_addr, UCS_SOCKADDR_STRING_LEN),
-              ucs_sockaddr_str((const struct sockaddr*)&iface->config.ifaddr,
-                               str_local_addr, UCS_SOCKADDR_STRING_LEN),
-              ep, fd);
+    for (int i = 0; i < iface->config.num_sockets; i++) {
+        pprintf("tcp_iface %p: accepted connection from "
+                  "%s on %s to tcp_ep %p (fd %d)\n", iface,
+                  ucs_sockaddr_str((const struct sockaddr*)&peer_addr[i],
+                                   str_remote_addr, UCS_SOCKADDR_STRING_LEN),
+                  ucs_sockaddr_str((const struct sockaddr*)&iface->config.ifaddr,
+                                   str_local_addr, UCS_SOCKADDR_STRING_LEN),
+                  ep, fds[i]);
+    }
     return UCS_OK;
 }
