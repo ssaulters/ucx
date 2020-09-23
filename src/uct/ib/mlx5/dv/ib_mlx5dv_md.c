@@ -738,7 +738,7 @@ static ucs_status_t uct_ib_mlx5_devx_md_open(struct ibv_device *ibv_device,
 
     ucs_recursive_spinlock_init(&md->dbrec_lock, 0);
     status = ucs_mpool_init(&md->dbrec_pool, 0,
-                            sizeof(uct_ib_mlx5_dbrec_t), 0,
+                            sizeof(uct_ib_mlx5_dbrec_t), 0, 0,
                             UCS_SYS_CACHE_LINE_SIZE,
                             ucs_get_page_size() / UCS_SYS_CACHE_LINE_SIZE - 1,
                             UINT_MAX, &uct_ib_mlx5_dbrec_ops, "devx dbrec");

@@ -441,7 +441,7 @@ static ucs_status_t uct_rc_iface_tx_ops_init(uct_rc_iface_t *iface)
     /* Create memory pool for flush completions. Can't just alloc a certain
      * size buffer, because number of simultaneous flushes is not limited by
      * CQ or QP resources. */
-    status = ucs_mpool_init(&iface->tx.flush_mp, 0, sizeof(*op), 0,
+    status = ucs_mpool_init(&iface->tx.flush_mp, 0, sizeof(*op), 0, 0,
                             UCS_SYS_CACHE_LINE_SIZE, 256,
                             UINT_MAX, &uct_rc_flush_comp_mpool_ops,
                             "flush-comps-only");
@@ -645,6 +645,7 @@ UCS_CLASS_INIT_FUNC(uct_rc_iface_t, uct_rc_iface_ops_t *ops, uct_md_h md,
         status = ucs_mpool_init(&self->tx.fc_mp,
                                 0,
                                 init_attr->fc_req_size,
+                                0,
                                 0,
                                 1,
                                 128,

@@ -52,9 +52,10 @@ union ucs_mpool_elem {
  * Memory pool chunk, which contains many elements.
  */
 struct ucs_mpool_chunk {
-    ucs_mpool_chunk_t      *next;      /* Next chunk */
-    void                   *elems;     /* Array of elements */
-    unsigned               num_elems;  /* How many elements */
+    ucs_mpool_chunk_t      *next;       /* Next chunk */
+    void                   *elems;      /* Array of elements */
+    unsigned               num_elems;   /* How many elements */
+    void                   *data_elems; /* Separate data allocation */
 };
 
 
@@ -72,6 +73,7 @@ struct ucs_mpool {
  */
 struct ucs_mpool_data {
     unsigned               elem_size;       /* Size of element in the chunk */
+    unsigned               extra_size;      /* Size of element when meta/data are separated */
     unsigned               alignment;       /* Element alignment */
     unsigned               align_offset;    /* Offset to alignment point */
     unsigned               elems_per_chunk; /* Number of elements per chunk */
@@ -127,6 +129,9 @@ struct ucs_mpool_ops {
      * @param obj          Object to initialize.
      */
     void         (*obj_cleanup)(ucs_mpool_t *mp, void *obj);
+
+    ucs_status_t (*chunk_data_alloc)(ucs_mpool_t *mp, size_t *size_p, void **chunk_p);
+    void         (*chunk_data_release)(ucs_mpool_t *mp, void *chunk);
 };
 
 
@@ -136,6 +141,7 @@ struct ucs_mpool_ops {
  * @param mp               Memory pool structure.
  * @param priv_size        Size of user-defined private data area.
  * @param elem_size        Size of an element.
+ * @param extra_size       Size of metadata element when data/meta are separately allocated.
  * @param align_offset     Offset in the element which should be aligned to the given boundary.
  * @param alignment        Boundary to which align the given offset within the element.
  * @param elems_per_chunk  Number of elements in a single chunk.
@@ -147,7 +153,8 @@ struct ucs_mpool_ops {
  * @return UCS status code.
  */
 ucs_status_t ucs_mpool_init(ucs_mpool_t *mp, size_t priv_size,
-                            size_t elem_size, size_t align_offset, size_t alignment,
+                            size_t elem_size, size_t extra_size,
+                            size_t align_offset, size_t alignment,
                             unsigned elems_per_chunk, unsigned max_elems,
                             ucs_mpool_ops_t *ops, const char *name);
 
@@ -196,6 +203,15 @@ int ucs_mpool_is_empty(ucs_mpool_t *mp);
  * @return New allocated object, or NULL if cannot allocate.
  */
 void *ucs_mpool_get(ucs_mpool_t *mp);
+
+/**
+ * Get an element from the memory pool allocated with separate data/metadata.
+ *
+ * @param mp               Memory pool structure.
+ *
+ * @return Pointer to newly allocated object, or NULL if cannot allocate.
+ */
+void **ucs_mpool_get_ptr(ucs_mpool_t *mp);
 
 
 /**

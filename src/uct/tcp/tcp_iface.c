@@ -556,7 +556,7 @@ static UCS_CLASS_INIT_FUNC(uct_tcp_iface_t, uct_md_h md, uct_worker_h worker,
         return UCS_ERR_INVALID_PARAM;
     }
 
-    status = ucs_mpool_init(&self->tx_mpool, 0, self->config.tx_seg_size,
+    status = ucs_mpool_init(&self->tx_mpool, 0, self->config.tx_seg_size, 0,
                             0, UCS_SYS_CACHE_LINE_SIZE,
                             (config->tx_mpool.bufs_grow == 0) ?
                             32 : config->tx_mpool.bufs_grow,
@@ -566,7 +566,7 @@ static UCS_CLASS_INIT_FUNC(uct_tcp_iface_t, uct_md_h md, uct_worker_h worker,
         goto err;
     }
 
-    status = ucs_mpool_init(&self->rx_mpool, 0, self->config.rx_seg_size * 2,
+    status = ucs_mpool_init(&self->rx_mpool, 0, self->config.rx_seg_size * 2, 0,
                             0, UCS_SYS_CACHE_LINE_SIZE,
                             (config->rx_mpool.bufs_grow == 0) ?
                             32 : config->rx_mpool.bufs_grow,

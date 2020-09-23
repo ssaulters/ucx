@@ -693,7 +693,7 @@ uct_rc_mlx5_iface_common_dm_tl_init(uct_mlx5_dm_data_t *data,
     data->start_va = dvdm.buf;
 
     status = ucs_mpool_init(&data->mp, 0,
-                            sizeof(uct_rc_iface_send_desc_t), 0, UCS_SYS_CACHE_LINE_SIZE,
+                            sizeof(uct_rc_iface_send_desc_t), 0, 0, UCS_SYS_CACHE_LINE_SIZE,
                             data->seg_count, data->seg_count,
                             &uct_dm_iface_mpool_ops, "mlx5_dm_desc");
     if (status != UCS_OK) {

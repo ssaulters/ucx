@@ -189,7 +189,7 @@ static UCS_CLASS_INIT_FUNC(uct_self_iface_t, uct_md_h md, uct_worker_h worker,
     self->id          = ucs_generate_uuid((uintptr_t)self);
     self->send_size   = config->seg_size;
 
-    status = ucs_mpool_init(&self->msg_mp, 0, self->send_size, 0,
+    status = ucs_mpool_init(&self->msg_mp, 0, self->send_size, 0, 0,
                             UCS_SYS_CACHE_LINE_SIZE,
                             2, /* 2 elements are enough for most of communications */
                             UINT_MAX, &uct_self_iface_mpool_ops, "self_msg_desc");

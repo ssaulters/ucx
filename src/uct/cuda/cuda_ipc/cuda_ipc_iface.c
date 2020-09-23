@@ -435,6 +435,7 @@ static UCS_CLASS_INIT_FUNC(uct_cuda_ipc_iface_t, uct_md_h md, uct_worker_h worke
                             0,
                             sizeof(uct_cuda_ipc_event_desc_t),
                             0,
+                            0,
                             UCS_SYS_CACHE_LINE_SIZE,
                             128,
                             self->config.max_cuda_ipc_events,

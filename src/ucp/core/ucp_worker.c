@@ -82,28 +82,36 @@ ucs_mpool_ops_t ucp_am_mpool_ops = {
     .chunk_alloc   = ucs_mpool_hugetlb_malloc,
     .chunk_release = ucs_mpool_hugetlb_free,
     .obj_init      = ucs_empty_function,
-    .obj_cleanup   = ucs_empty_function
+    .obj_cleanup   = ucs_empty_function,
+    .chunk_data_alloc = NULL,
+    .chunk_data_release = NULL
 };
 
 ucs_mpool_ops_t ucp_reg_mpool_ops = {
     .chunk_alloc   = ucp_reg_mpool_malloc,
     .chunk_release = ucp_reg_mpool_free,
     .obj_init      = ucp_mpool_obj_init,
-    .obj_cleanup   = ucs_empty_function
+    .obj_cleanup   = ucs_empty_function,
+    .chunk_data_alloc = NULL,
+    .chunk_data_release = NULL
 };
 
 ucs_mpool_ops_t ucp_frag_mpool_ops = {
     .chunk_alloc   = ucp_frag_mpool_malloc,
     .chunk_release = ucp_frag_mpool_free,
     .obj_init      = ucp_mpool_obj_init,
-    .obj_cleanup   = ucs_empty_function
+    .obj_cleanup   = ucs_empty_function,
+    .chunk_data_alloc = NULL,
+    .chunk_data_release = NULL
 };
 
 static ucs_mpool_ops_t ucp_rkey_mpool_ops = {
     .chunk_alloc   = ucs_mpool_chunk_malloc,
     .chunk_release = ucs_mpool_chunk_free,
     .obj_init      = NULL,
-    .obj_cleanup   = NULL
+    .obj_cleanup   = NULL,
+    .chunk_data_alloc = NULL,
+    .chunk_data_release = NULL
 };
 
 #define ucp_worker_discard_uct_ep_hash_key(_uct_ep) \
@@ -1715,7 +1723,7 @@ static ucs_status_t ucp_worker_init_mpools(ucp_worker_h worker)
     /* Create memory pool for requests */
     status = ucs_mpool_init(&worker->req_mp, 0,
                             sizeof(ucp_request_t) + context->config.request.size,
-                            0, UCS_SYS_CACHE_LINE_SIZE, 128, UINT_MAX,
+                            0, 0, UCS_SYS_CACHE_LINE_SIZE, 128, UINT_MAX,
                             &ucp_request_mpool_ops, "ucp_requests");
     if (status != UCS_OK) {
         goto err;
@@ -1725,7 +1733,7 @@ static ucs_status_t ucp_worker_init_mpools(ucp_worker_h worker)
     status = ucs_mpool_init(&worker->rkey_mp, 0,
                             sizeof(ucp_rkey_t) +
                             sizeof(ucp_tl_rkey_t) * UCP_RKEY_MPOOL_MAX_MD,
-                            0, UCS_SYS_CACHE_LINE_SIZE, 128, UINT_MAX,
+                            0, 0, UCS_SYS_CACHE_LINE_SIZE, 128, UINT_MAX,
                             &ucp_rkey_mpool_ops, "ucp_rkeys");
     if (status != UCS_OK) {
         goto err_req_mp_cleanup;
@@ -1734,7 +1742,7 @@ static ucs_status_t ucp_worker_init_mpools(ucp_worker_h worker)
     /* Create memory pool for incoming UCT messages without a UCT descriptor */
     status = ucs_mpool_init(&worker->am_mp, 0,
                             max_mp_entry_size + UCP_WORKER_HEADROOM_SIZE,
-                            0, UCS_SYS_CACHE_LINE_SIZE, 128, UINT_MAX,
+                            0, 0, UCS_SYS_CACHE_LINE_SIZE, 128, UINT_MAX,
                             &ucp_am_mpool_ops, "ucp_am_bufs");
     if (status != UCS_OK) {
         goto err_rkey_mp_cleanup;
@@ -1743,7 +1751,7 @@ static ucs_status_t ucp_worker_init_mpools(ucp_worker_h worker)
     /* Create memory pool of bounce buffers */
     status = ucs_mpool_init(&worker->reg_mp, 0,
                             context->config.ext.seg_size + sizeof(ucp_mem_desc_t),
-                            sizeof(ucp_mem_desc_t), UCS_SYS_CACHE_LINE_SIZE,
+                            0, sizeof(ucp_mem_desc_t), UCS_SYS_CACHE_LINE_SIZE,
                             128, UINT_MAX, &ucp_reg_mpool_ops, "ucp_reg_bufs");
     if (status != UCS_OK) {
         goto err_am_mp_cleanup;
@@ -1752,7 +1760,7 @@ static ucs_status_t ucp_worker_init_mpools(ucp_worker_h worker)
     /* Create memory pool for pipelined rndv fragments */
     status = ucs_mpool_init(&worker->rndv_frag_mp, 0,
                             context->config.ext.rndv_frag_size + sizeof(ucp_mem_desc_t),
-                            sizeof(ucp_mem_desc_t), UCS_SYS_PCI_MAX_PAYLOAD, 128,
+                            0, sizeof(ucp_mem_desc_t), UCS_SYS_PCI_MAX_PAYLOAD, 128,
                             UINT_MAX, &ucp_frag_mpool_ops, "ucp_rndv_frags");
     if (status != UCS_OK) {
         goto err_reg_mp_cleanup;

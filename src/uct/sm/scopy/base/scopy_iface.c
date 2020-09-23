@@ -101,7 +101,7 @@ UCS_CLASS_INIT_FUNC(uct_scopy_iface_t, uct_scopy_iface_ops_t *ops, uct_md_h md,
 
     ucs_arbiter_init(&self->arbiter);
 
-    status = ucs_mpool_init(&self->tx_mpool, 0, elem_size,
+    status = ucs_mpool_init(&self->tx_mpool, 0, elem_size, 0,
                             0, UCS_SYS_CACHE_LINE_SIZE,
                             config->tx_mpool.bufs_grow,
                             config->tx_mpool.max_bufs,
